@@ -1,0 +1,1632 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+title: "Untitled"
+---
+author: "Andreas Østergaard"
+date: "5/11/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r PAKKER, include=FALSE}
+library(ggpubr)
+library(urca)
+library(vars)
+library(mFilter)
+library(readxl)
+library(stargazer)
+library(stats4)
+library(stats)
+library(ggplot2)
+library(dplyr)
+library(urca)
+library(lubridate)
+options("scipen"=100, "digits"=4)
+```
+
+```{r SKABELON TIL PLOTS}
+th <- theme(title = element_text(colour = "#404040"),
+            plot.background=element_rect(fill="#f3f3f3"),  
+            panel.background = element_rect(fill="#f3f3f3"), 
+            legend.background = element_rect(fill="#f3f3f3"),
+            plot.subtitle = element_text(color="#666666"),
+            plot.caption = element_text(color="#616161", size=9),
+            legend.key = element_rect(fill = "#f3f3f3", colour = "#f3f3f3"),
+            plot.margin = unit(c(0.5, 0.7, 0.5, 0.7), "cm"), 
+            panel.border = element_rect(color = "black",
+                                    fill = NA,
+                                    size = 0.15))
+
+```
+
+# Model 1
+```{r INDLÆS DATA OG SÆTTER VARIABLE}
+datavecm1 <- read_excel("~/Desktop/Universitet/Onedrive AAU/OneDrive - Aalborg Universitet/Bachelorprojekt/Igangværende projekt/samletdata.xlsx", sheet = "model1")
+# g er for grunddata (REALE PRISER)
+tid <- datavecm1$Tid
+HPg <- ts(datavecm1$`Boligpriser 1985`, start = c(1951,1), frequency = 4)
+BNPg <- ts(datavecm1$`Real BNP`, start = c(1951,1), frequency = 4)
+KREDITg <- ts(datavecm1$`Real kredit(mortgage bank)`, start = c(1951,1), frequency = 4)
+RENTEN30g <- ts(datavecm1$`Real renten30`, start = c(1951,1), frequency = 4)
+DUMMYg <- datavecm1$dummy
+
+HP <- ts(log(HPg), start = c(1951,1), frequency = 4)
+BNP <- ts(log(BNPg), start = c(1951,1), frequency = 4)
+KREDIT <- ts(log(KREDITg), start = c(1951,1), frequency = 4)
+RENTEN30 <- ts(log(RENTEN30g), start = c(1951,1), frequency = 4)
+DUMMY <- ts(DUMMYg, start = c(1951,1), frequency = 4)
+```
+
+```{r SÆSONKORRIGERING + plots}
+HPsæson <- HP - decompose(HP)$seasonal
+BNPsæson <- BNP - decompose(BNP)$seasonal
+KREDITsæson <- KREDIT - decompose(KREDIT)$seasonal
+RENTEN30sæson <- RENTEN30 - decompose(RENTEN30)$seasonal
+```
+
+```{r SÆSONDATA}
+sæson <- data.frame(tid)
+sæson$HUSPRIS <- HPsæson
+sæson$BNP <- BNPsæson
+sæson$KREDIT <- KREDITsæson
+sæson$RENTEN30 <- RENTEN30sæson
+```
+
+```{r ADF test af stationærhed ved kun sæsonjustering, eval=FALSE, include=FALSE}
+######### KRITISKE VÆRDI
+##### TREND
+ur.df(BNPsæson, "trend", selectlags = "AIC", lags = 7)@cval[1,1]
+#### DRIFT
+ur.df(BNPsæson, "drift", selectlags = "AIC", lags = 7)@cval
+##### NONE
+ur.df(BNPsæson, "none", selectlags = "AIC", lags = 7)@cval
+
+######## TEST!
+ADF0 <- matrix(c(
+ur.df(BNPsæson, "trend", selectlags = "AIC", lags = 7)@cval[1,1],
+ur.df(HPsæson, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(BNPsæson, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(KREDITsæson, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(RENTEN30sæson, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+
+ur.df(BNPsæson, "drift", selectlags = "AIC", lags = 7)@cval[1,1],
+ur.df(HPsæson, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(BNPsæson, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(KREDITsæson, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(RENTEN30sæson, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+
+ur.df(BNPsæson, "none", selectlags = "AIC", lags = 7)@cval[1,1],
+ur.df(HPsæson, "none", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(BNPsæson, "none", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(KREDITsæson, "none", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(RENTEN30sæson, "none", selectlags = "AIC", lags = 7)@teststat[1,1]), 
+ncol = 3, nrow = 5, byrow = F)
+rownames(ADF0) <- c("1% KRITISKE VÆRDIER",colnames(sæson[2:5]))
+colnames(ADF0) <- c("TREND","DRIFT","NONE")
+ADF0
+```
+
+# HP FILTER
+```{r HPFILTER - DETREND LAMBDA 1600}
+lambda <- 1600
+
+HPcyklus <- hpfilter(HPsæson, lambda, type = "lambda")$cycle
+
+BNPcyklus <- hpfilter(BNPsæson, lambda, type = "lambda")$cycle
+
+KREDITcyklus <- hpfilter(KREDITsæson, lambda, type = "lambda")$cycle
+
+RENTEN30cyklus <- hpfilter(RENTEN30sæson, lambda, type = "lambda")$cycle
+```
+
+```{r CYKLISK DATASÆT}
+cyklus <- data.frame(tid)
+cyklus$HUSPRIS <- HPcyklus
+cyklus$BNP <- BNPcyklus
+cyklus$KREDIT <- KREDITcyklus
+cyklus$RENTEN30 <- RENTEN30cyklus
+```
+
+
+```{r ADF og PP test efter HP FILTER, eval=FALSE, include=FALSE}
+######## TEST!
+ADF0 <- matrix(c(
+ur.df(BNPcyklus, "trend", selectlags = "AIC", lags = 7)@cval[1,1],
+ur.df(HPcyklus, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(BNPcyklus, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(KREDITcyklus, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(RENTEN30cyklus, "trend", selectlags = "AIC", lags = 7)@teststat[1,1],
+
+ur.df(BNPcyklus, "drift", selectlags = "AIC", lags = 7)@cval[1,1],
+ur.df(HPcyklus, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(BNPcyklus, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(KREDITcyklus, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(RENTEN30cyklus, "drift", selectlags = "AIC", lags = 7)@teststat[1,1],
+
+ur.df(BNPcyklus, "none", selectlags = "AIC", lags = 7)@cval[1,1],
+ur.df(HPcyklus, "none", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(BNPcyklus, "none", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(KREDITcyklus, "none", selectlags = "AIC", lags = 7)@teststat[1,1],
+ur.df(RENTEN30cyklus, "none", selectlags = "AIC", lags = 7)@teststat[1,1]),
+ncol = 3, nrow = 5, byrow = F)
+rownames(ADF0) <- c("1% KRITISKE VÆRDIER",colnames(sæson[2:5]))
+colnames(ADF0) <- c("TREND","DRIFT","NONE")
+ADF0
+```
+
+
+```{r Korrelogrammer}
+Autokor <- as.data.frame(c(-7:7))
+Autokor <- rename(Autokor, c("Lag"="c(-7:7)"))
+
+#AUTOKORRELATION
+Kryds_HP_HP <- ccf(HPcyklus, HPcyklus, 7, plot = F)
+Autokor$Kryds_HP_HP <- as.numeric(Kryds_HP_HP$acf)
+Kryds_RENTE_RENTE <- ccf(RENTEN30cyklus, RENTEN30cyklus, 7, plot = F)
+Autokor$Kryds_RENTE_RENTE <- as.numeric(Kryds_RENTE_RENTE$acf)
+Kryds_KREDIT_KREDIT <- ccf(KREDITcyklus, KREDITcyklus, 7, plot = F)
+Autokor$Kryds_KREDIT_KREDIT <- as.numeric(Kryds_KREDIT_KREDIT$acf)
+Kryds_BNP_BNP <- ccf(BNPcyklus,BNPcyklus, 7, plot=F)
+Autokor$Kryds_BNP_BNP <- as.numeric(Kryds_BNP_BNP$acf)
+
+# HUSPRIS
+Kryds_HP_BNP <- ccf(BNPcyklus,HPcyklus, 7, plot = F)
+Autokor$Kryds_HP_BNP <- as.numeric(Kryds_HP_BNP$acf)
+Kryds_HP_RENTE <- ccf(RENTEN30cyklus,HPcyklus, 7, plot = F)
+Autokor$Kryds_HP_RENTE <- as.numeric(Kryds_HP_RENTE$acf)
+Kryds_HP_KREDIT <- ccf(KREDITcyklus,HPcyklus, 7, plot = F)
+Autokor$Kryds_HP_KREDIT <- as.numeric(Kryds_HP_KREDIT$acf)
+
+# BNP
+Kryds_BNP_HP <- ccf(HPcyklus,BNPcyklus, 7, plot = F)
+Autokor$Kryds_BNP_HP <- as.numeric(Kryds_BNP_HP$acf)
+Kryds_BNP_RENTE <- ccf(RENTEN30cyklus,BNPcyklus, 7, plot = F)
+Autokor$Kryds_BNP_RENTE <- as.numeric(Kryds_BNP_RENTE$acf)
+Kryds_BNP_KREDIT <- ccf(KREDITcyklus,BNPcyklus, 7, plot = F)
+Autokor$Kryds_BNP_KREDIT <- as.numeric(Kryds_BNP_KREDIT$acf)
+
+# RENTEN
+Kryds_RENTE_HP <- ccf(HPcyklus,RENTEN30cyklus, 7, plot = F)
+Autokor$Kryds_RENTE_HP <- as.numeric(Kryds_RENTE_HP$acf)
+Kryds_RENTE_BNP <- ccf(BNPcyklus,RENTEN30cyklus, 7, plot = F)
+Autokor$Kryds_RENTE_BNP <- as.numeric(Kryds_RENTE_BNP$acf)
+Kryds_RENTE_KREDIT <- ccf(KREDITcyklus,RENTEN30cyklus, 7, plot = F)
+Autokor$Kryds_RENTE_KREDIT <- as.numeric(Kryds_RENTE_KREDIT$acf)
+
+# BNP
+Kryds_KREDIT_HP <- ccf(HPcyklus,KREDITcyklus, 7, plot = F)
+Autokor$Kryds_KREDIT_HP <- as.numeric(Kryds_KREDIT_HP$acf)
+Kryds_KREDIT_RENTE <- ccf(RENTEN30cyklus,KREDITcyklus, 7, plot = F)
+Autokor$Kryds_KREDIT_RENTE <- as.numeric(Kryds_KREDIT_RENTE$acf)
+Kryds_KREDIT_BNP <- ccf(BNPcyklus,KREDITcyklus, 7, plot = F)
+Autokor$Kryds_KREDIT_BNP <- as.numeric(Kryds_KREDIT_BNP$acf)
+
+p11 <- ggplot(Autokor)+
+  geom_line(aes(x=Lag, y=0))+
+  geom_line(aes(y=Kryds_HP_HP, x=Lag, color = "HUSPRIS")) +
+  geom_line(aes(y=Kryds_RENTE_RENTE, x=Lag, color = "RENTE")) +   
+  geom_line(aes(y=Kryds_BNP_BNP, x=Lag, color = "BNP")) +
+  geom_line(aes(y=Kryds_KREDIT_KREDIT, x=Lag, color = "KREDIT")) +
+  scale_y_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-0.3, 1), breaks=round(seq(min(-1), max(1), by = 0.5),1)) +
+  scale_x_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-7, 7), breaks=round(seq(min(-7), max(7), by = 1),1)) +
+  
+  labs(title = "Autokorrelationer", x="Lag", y="Korrelation", caption = "", color=NULL) + theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th
+
+
+p22 <- ggplot(Autokor)+
+  geom_line(aes(x=Lag, y=0))+
+  geom_line(aes(y=Kryds_HP_BNP, x=Lag, color = "BNP")) +
+  geom_line(aes(y=Kryds_HP_RENTE, x=Lag, color = "RENTE")) + 
+  geom_line(aes(y=Kryds_HP_KREDIT, x=Lag, color = "KREDIT")) +
+  scale_y_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-0.3, 1), breaks=round(seq(min(-1), max(1), by = 0.5),1)) +
+  scale_x_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-7, 7), breaks=round(seq(min(-7), max(7), by = 1),1)) +
+  scale_color_manual(name='Variable',
+                     breaks=c('BNP', 'RENTE', 'KREDIT'),
+                     values=c('BNP'='red', 'RENTE'='orange', 'KREDIT'='lightblue'))+
+  labs(title = "Krydskorrelationer: HUSPRIS", x="Lag (Kvartaler)", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th 
+
+
+p23 <- ggplot(Autokor)+
+  geom_line(aes(x=Lag, y=0))+
+  geom_line(aes(y=Kryds_BNP_HP, x=Lag, color = "HUSPRIS")) +
+  geom_line(aes(y=Kryds_BNP_RENTE, x=Lag, color = "RENTE")) + 
+  geom_line(aes(y=Kryds_BNP_KREDIT, x=Lag, color = "KREDIT")) +
+  scale_y_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-0.3, 1), breaks=round(seq(min(-1), max(1), by = 0.5),1)) +
+  scale_x_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-7, 7), breaks=round(seq(min(-7), max(7), by = 1),1)) +
+  scale_color_manual(name='Variable',
+                     breaks=c('HUSPRIS', 'RENTE', 'KREDIT'),
+                     values=c('HUSPRIS'='blue', 'RENTE'='orange', 'KREDIT'='lightblue'))+
+  labs(title = "Krydskorrelationer: BNP", x="Lag (Kvartaler)", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th 
+
+
+p32 <- ggplot(Autokor)+
+  geom_line(aes(x=Lag, y=0))+
+  geom_line(aes(y=Kryds_RENTE_HP, x=Lag, color = "HUSPRIS")) +
+  geom_line(aes(y=Kryds_RENTE_KREDIT, x=Lag, color = "KREDIT")) + 
+  geom_line(aes(y=Kryds_RENTE_BNP, x=Lag, color = "BNP")) +
+  scale_y_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-0.3, 1), breaks=round(seq(min(-1), max(1), by = 0.5),1)) +
+  scale_x_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-7, 7), breaks=round(seq(min(-7), max(7), by = 1),1)) +
+  scale_color_manual(name='Variable',
+                     breaks=c('HUSPRIS', 'KREDIT', 'BNP'),
+                     values=c('HUSPRIS'='blue', 'KREDIT'='lightblue', 'BNP'='red'))+
+  labs(title = "Krydskorrelationer: RENTEN", x="Lag (Kvartaler)", y="Korrelation", caption = "Kilde: Egne beregninger", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th
+
+p33 <- ggplot(Autokor)+
+  geom_line(aes(x=Lag, y=0))+
+  geom_line(aes(y=Kryds_KREDIT_HP, x=Lag, color = "HUSPRIS")) +
+  geom_line(aes(y=Kryds_KREDIT_RENTE, x=Lag, color = "RENTE")) + 
+  geom_line(aes(y=Kryds_KREDIT_BNP, x=Lag, color = "BNP")) +
+  scale_y_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-0.3, 1), breaks=round(seq(min(-1), max(1), by = 0.5),1)) +
+  scale_x_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-7, 7), breaks=round(seq(min(-7), max(7), by = 1),1)) +
+    scale_color_manual(name='Variable',
+                     breaks=c('HUSPRIS', 'RENTE', 'BNP'),
+                     values=c('HUSPRIS'='blue', 'RENTE'='orange', 'BNP'='red'))+
+  labs(title = "Krydskorrelationer: KREDIT", x="Lag (Kvartaler)", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th
+
+
+p123 <- ggplot(Autokor)+ # Lavet pga. legend
+  geom_line(aes(x=Lag, y=0))+
+  geom_line(aes(y=Kryds_KREDIT_HP, x=Lag, color = "HUSPRIS")) +
+  geom_line(aes(y=Kryds_KREDIT_RENTE, x=Lag, color = "RENTE")) + 
+  geom_line(aes(y=Kryds_KREDIT_BNP, x=Lag, color = "BNP")) +
+  geom_line(aes(y=Kryds_BNP_KREDIT, x=Lag, color = "KREDIT")) +
+  scale_y_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-0.3, 1), breaks=round(seq(min(-1), max(1), by = 0.5),1)) +
+  scale_x_continuous(labels = function(x) format(x, big.mark = ".", decimal.mark = ",") ,limits = c(-7, 7), breaks=round(seq(min(-7), max(7), by = 1),1)) +
+    scale_color_manual(name='Variable',
+                     breaks=c('HUSPRIS', 'RENTE', 'BNP','KREDIT'),
+                     values=c('HUSPRIS'='blue', 'RENTE'='orange', 'BNP'='red','KREDIT'='lightblue'))+
+  labs(title = "Krydskorrelationer: KREDIT", x="Lag", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th
+
+
+
+ggarrange(p23, p22,p33,p32, ncol = 2, nrow = 2, common.legend = F, legend = "bottom", legend.grob = get_legend(p123))  + bgcolor("#f3f3f3")
+```
+
+
+```{r GRANGER TEST}
+#VARIABLE-HUSPRIS
+grangertest(BNPcyklus, HPcyklus, order = 6)
+grangertest(RENTEN30cyklus, HPcyklus, order = 6)
+grangertest(KREDITcyklus, HPcyklus, order = 6)
+#VARIABLE-BNP
+grangertest(HPcyklus, BNPcyklus, order = 6)
+grangertest(RENTEN30cyklus, BNPcyklus, order = 6)
+grangertest(KREDITcyklus, BNPcyklus, order = 6)
+#VARIABLE-RENTE
+grangertest(HPcyklus, RENTEN30cyklus, order = 6)
+grangertest(BNPcyklus, RENTEN30cyklus, order = 6)
+grangertest(KREDITcyklus, RENTEN30cyklus, order = 6)
+#VARIABLE-KREDIT
+grangertest(HPcyklus, KREDITcyklus, order = 6)
+grangertest(BNPcyklus, KREDITcyklus, order = 6)
+grangertest(RENTEN30cyklus, KREDITcyklus, order = 6)
+
+```
+
+
+# ESTIMERING AF MODELLER
+```{r REDUCEREDE VAR VERSION, warning=FALSE}
+matt <- data.frame(BNPcyklus, HPcyklus ,KREDITcyklus, RENTEN30cyklus)
+colnames(matt) <- c("BNP", "HUSPRISEN", "KREDIT", "RENTEN")
+# Valg af lags
+lagsselektion.model1 <- VARselect(matt, lag.max = 10,type = "const", exogen = DUMMY)$selection
+stargazer(lagsselektion.model1, type = "text", title = "Valg af optimale lags - Med konstant", notes = "Beregninger ved funktionen VARselect i R-Studio",
+          out="Lagsmodel1.html")
+
+varmodel <- VAR(matt, p=6, type="const", exogen = DUMMY)
+
+stargazer(varmodel$varresult, title="Model 1 estimater",
+          single.row = TRUE, 
+          type ="text", 
+          report = "vc*",
+          add.lines = list(c("AIC",round(AIC(varmodel$varresult$BNP)), round(AIC(varmodel$varresult$HUSPRISEN)), round(AIC(varmodel$varresult$KREDIT)), round(AIC(varmodel$varresult$RENTEN)))),
+          omit.table.layout = "ld", 
+          table.layout = "=m=c=!t-!as=!n",
+          model.numbers = F,
+          header = TRUE, 
+          df=FALSE, 
+          digits=3,
+          column.labels = colnames(matt),
+          align = T,
+          out = "tabel.htm",
+          style = "qje")
+```
+
+```{r samlede plot af IRF, fig.height=7, fig.width=10}
+BNP_impulse <- ggplot(irfdata)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BNP, x=kvartaler, color = "BNP"), color = "red") +
+  geom_ribbon(aes(y=BNP, x=kvartaler,xmin = 0, xmax = 40, ymin=LOWER_BNP, ymax = UPPER_BNP), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(irfdata$kvartaler, n = 15)) + 
+  labs(title = "Impulse fra BNP",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th
+
+Huspris_impulse <- ggplot(irfdata)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=HUSPRISEN, x=kvartaler, color = "HUSPRISEN"), color = "red") +
+  geom_ribbon(aes(y=HUSPRISEN, x=kvartaler,xmin = 0, xmax = 40, ymin=LOWER_HUSPRISEN, ymax = UPPER_HUSPRISEN), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(irfdata$kvartaler, n = 15)) + 
+  labs(title = "Impulse fra Boligpris",subtitle = "67% konfidensinterval", x="Lag", y="", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th
+
+RENTEN_impulse <- ggplot(irfdata)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=RENTEN, x=kvartaler, color = "RENTEN"), color = "red") +
+  geom_ribbon(aes(y=RENTEN, x=kvartaler,xmin = 0, xmax = 40, ymin=LOWER_RENTEN, ymax = UPPER_RENTEN), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(irfdata$kvartaler, n = 15)) + 
+  labs(title = "Impulse fra 30 års renten",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris",  color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th
+
+KREDIT_impulse <- ggplot(irfdata)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=KREDIT, x=kvartaler, color = "KREDIT"), color = "red") +
+  geom_ribbon(aes(y=KREDIT, x=kvartaler,xmin = 0, xmax = 40, ymin=LOWER_KREDIT, ymax = UPPER_KREDIT), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(irfdata$kvartaler, n = 15)) + 
+  labs(title = "Impulse fra Kredit",subtitle = "67% konfidensinterval", x="Lag", y="", caption = "Egne beregninger", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th
+
+ggarrange(BNP_impulse, Huspris_impulse, RENTEN_impulse, KREDIT_impulse, ncol = 2, nrow = 2)
+```
+
+
+
+```{r SVAR MODEL, warning=FALSE}
+
+bmat <- diag(4)
+bmat[2,1]<-NA
+bmat[3,1:2]<-NA
+bmat[4,1:3]<-NA
+colnames(bmat) <- colnames(matt)
+rownames(bmat) <- colnames(matt)
+bmat
+
+# Model - varmodel er definere i forrige chunk
+svarmodel <- SVAR(varmodel,Bmat = bmat)
+
+# Respons
+svarirf <- irf(svarmodel, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+# Kumulativ respons
+svarirf_cumulative <- irf(svarmodel, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = T, ci = 0.67, runs = 1000)
+
+```
+
+```{r SVAR IRF datasæt}
+
+Svarirfdata <- as.data.frame(c(0:40))
+Svarirfdata <- rename(Svarirfdata, c("kvartaler"="c(0:40)"))
+Svarirfdata$Kvartaler <- unlist(as.data.frame(c(0:40)))
+
+Svarirfdata$BNP_SVAR <- as.numeric(svarirf$irf$BNP)
+Svarirfdata$LOWER_BNP_SVAR <- svarirf$Lower$BNP
+Svarirfdata$UPPER_BNP_SVAR <- svarirf$Upper$BNP
+
+Svarirfdata$HUSPRISEN_SVAR <- svarirf$irf$HUSPRISEN
+Svarirfdata$LOWER_HUSPRISEN_SVAR <- svarirf$Lower$HUSPRISEN
+Svarirfdata$UPPER_HUSPRISEN_SVAR <- svarirf$Upper$HUSPRISEN
+
+Svarirfdata$RENTEN_SVAR <- svarirf$irf$RENTEN
+Svarirfdata$LOWER_RENTEN_SVAR <- svarirf$Lower$RENTEN
+Svarirfdata$UPPER_RENTEN_SVAR <- svarirf$Upper$RENTEN
+
+Svarirfdata$KREDIT_SVAR <- svarirf$irf$KREDIT
+Svarirfdata$LOWER_KREDIT_SVAR <- svarirf$Lower$KREDIT
+Svarirfdata$UPPER_KREDIT_SVAR <- svarirf$Upper$KREDIT
+
+#KUMULATIVE EFFEKTER
+svarirfdata_cumulative <- data.frame(c(0:40))
+svarirfdata_cumulative <- rename(svarirfdata_cumulative, c("kvartaler"="c.0.40."))
+#svarirfdata_cumulative$Kvartaler <- unlist(as.data.frame(c(0:40)))
+
+svarirfdata_cumulative$BNP_SVAR_kum <- as.numeric(svarirf_cumulative$irf$BNP)
+svarirfdata_cumulative$LOWER_BNP_SVAR_kum <- svarirf_cumulative$Lower$BNP
+svarirfdata_cumulative$UPPER_BNP_SVAR_kum <- svarirf_cumulative$Upper$BNP
+
+svarirfdata_cumulative$HUSPRISEN_SVAR_kum <- svarirf_cumulative$irf$HUSPRISEN
+svarirfdata_cumulative$LOWER_HUSPRISEN_SVAR_kum <- svarirf_cumulative$Lower$HUSPRISEN
+svarirfdata_cumulative$UPPER_HUSPRISEN_SVAR_kum <- svarirf_cumulative$Upper$HUSPRISEN
+
+svarirfdata_cumulative$RENTEN_SVAR_kum <- svarirf_cumulative$irf$RENTEN
+svarirfdata_cumulative$LOWER_RENTEN_SVAR_kum <- svarirf_cumulative$Lower$RENTEN
+svarirfdata_cumulative$UPPER_RENTEN_SVAR_kum <- svarirf_cumulative$Upper$RENTEN
+
+svarirfdata_cumulative$KREDIT_SVAR_kum <- svarirf_cumulative$irf$KREDIT
+svarirfdata_cumulative$LOWER_KREDIT_SVAR_kum <- svarirf_cumulative$Lower$KREDIT
+svarirfdata_cumulative$UPPER_KREDIT_SVAR_kum <- svarirf_cumulative$Upper$KREDIT
+```
+
+```{r plot SVAR impulse,}
+SVAR_BNP_impulse <- ggplot(Svarirfdata)+
+  geom_line(aes(x=Kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BNP_SVAR, x=Kvartaler, color = "BNP_SVAR"), color = "red") +
+  geom_ribbon(aes(y=BNP_SVAR, x=Kvartaler,xmin = 0, xmax = 41, ymin=LOWER_BNP_SVAR, ymax = UPPER_BNP_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(Svarirfdata$Kvartaler, n = 15)) + 
+  labs(title = "SVAR Impulse fra BNP",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris", color=NULL) +
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_RENTE_impulse <- ggplot(Svarirfdata)+
+  geom_line(aes(x=Kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=RENTEN_SVAR, x=Kvartaler, color = "RENTEN_SVAR"), color = "red") +
+  geom_ribbon(aes(y=RENTEN_SVAR, x=Kvartaler,xmin = 0, xmax = 41, ymin=LOWER_RENTEN_SVAR, ymax = UPPER_RENTEN_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(Svarirfdata$Kvartaler, n = 15)) + 
+  labs(title = "SVAR Impulse fra Renten",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_KREDIT_impulse <- ggplot(Svarirfdata)+
+  geom_line(aes(x=Kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=KREDIT_SVAR, x=Kvartaler, color = "KREDIT_SVAR"), color = "red") +
+  geom_ribbon(aes(y=KREDIT_SVAR, x=Kvartaler,xmin = 0, xmax = 41, ymin=LOWER_KREDIT_SVAR, ymax = UPPER_KREDIT_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(Svarirfdata$Kvartaler, n = 15)) + 
+  labs(title = "SVAR Impulse fra Kredit",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_HP_impulse <- ggplot(Svarirfdata)+
+  geom_line(aes(x=Kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=HUSPRISEN_SVAR, x=Kvartaler, color = "HUSPRISEN_SVAR"), color = "red") +
+  geom_ribbon(aes(y=HUSPRISEN_SVAR, x=Kvartaler,xmin = 0, xmax = 41, ymin=LOWER_HUSPRISEN_SVAR, ymax = UPPER_HUSPRISEN_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(Svarirfdata$Kvartaler, n = 15)) + 
+  labs(title = "SVAR Impulse fra Boligpris",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+samlet_SVAR_plot <- ggarrange(SVAR_BNP_impulse, SVAR_RENTE_impulse, SVAR_KREDIT_impulse, SVAR_HP_impulse, ncol = 2, nrow = 2)
+samlet_SVAR_plot
+
+ggexport(
+  samlet_SVAR_plot,
+  plotlist = NULL,
+  filename = "Svar IRF plot.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 1500,
+  height = 1200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+
+```
+
+```{r plots SVAR impulse - KUMULATIVE}
+SVAR_BNP_impulse_kumulativ <- ggplot(svarirfdata_cumulative)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BNP_SVAR_kum, x=kvartaler, color = "BNP_SVAR_kum"), color = "red") +
+  geom_ribbon(aes(y=BNP_SVAR_kum, x=kvartaler,xmin = 0, xmax = 41, ymin=LOWER_BNP_SVAR_kum, ymax = UPPER_BNP_SVAR_kum), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(svarirfdata_cumulative$kvartaler, n = 15)) + 
+  labs(title = "Kumulative SVAR Impulse fra BNP",subtitle = "67% konfidensinterval", x="Lag (Kvartaler)", y="Boligprisrespons", color=NULL) +
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_RENTE_impulse_kumulativ <- ggplot(svarirfdata_cumulative)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=RENTEN_SVAR_kum, x=kvartaler, color = "RENTEN_SVAR_kum"), color = "red") +
+  geom_ribbon(aes(y=RENTEN_SVAR_kum, x=kvartaler,xmin = 0, xmax = 41, ymin=LOWER_RENTEN_SVAR_kum, ymax = UPPER_RENTEN_SVAR_kum), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(svarirfdata_cumulative$kvartaler, n = 15)) + 
+  labs(title = "Kumulative SVAR Impulse fra Renten",subtitle = "67% konfidensinterval", x="Lag (Kvartaler)", y="Boligprisrespons", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_KREDIT_impulse_kumulativ <- ggplot(svarirfdata_cumulative)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=KREDIT_SVAR_kum, x=kvartaler, color = "KREDIT_SVAR_kum"), color = "red") +
+  geom_ribbon(aes(y=KREDIT_SVAR_kum, x=kvartaler,xmin = 0, xmax = 41, ymin=LOWER_KREDIT_SVAR_kum, ymax = UPPER_KREDIT_SVAR_kum), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(svarirfdata_cumulative$kvartaler, n = 15)) + 
+  labs(title = "Kumulative SVAR Impulse fra Kredit",subtitle = "67% konfidensinterval", x="Lag (Kvartaler)", y="Boligprisrespons", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+
+SVAR_HP_impulse_kumulativ <- ggplot(svarirfdata_cumulative)+
+  geom_line(aes(x=kvartaler, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=HUSPRISEN_SVAR_kum, x=kvartaler, color = "HUSPRISEN_SVAR_kum"), color = "red") +
+  geom_ribbon(aes(y=HUSPRISEN_SVAR_kum, x=kvartaler,xmin = 0, xmax = 41, ymin=LOWER_HUSPRISEN_SVAR_kum, ymax = UPPER_HUSPRISEN_SVAR_kum), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(svarirfdata_cumulative$kvartaler, n = 15)) + 
+  labs(title = "Kumulative SVAR Impulse fra Boligpris",subtitle = "67% konfidensinterval", x="Lag (Kvartaler)", y="Boligprisrespons", color=NULL, caption = "Egne beregninger") + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+samlet_SVAR_plot_kumulativ <- ggarrange(SVAR_BNP_impulse_kumulativ, SVAR_RENTE_impulse_kumulativ, SVAR_KREDIT_impulse_kumulativ, SVAR_HP_impulse_kumulativ, ncol = 2, nrow = 2)
+samlet_SVAR_plot_kumulativ
+
+ggexport(
+  samlet_SVAR_plot_kumulativ,
+  plotlist = NULL,
+  filename = "Svar IRF plot kumulativ.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 1800,
+  height = 1200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+```
+
+```{r DIAGNOSE af model 1}
+serial.test(varmodel,lags.pt = 19)
+arch.test(varmodel, lags.multi = 16) 
+normality.test(varmodel, multivariate.only = F)
+plot(stability(varmodel, type = "OLS-CUSUM", dynamic = T))
+```
+
+```{r Robusthed af specifikationer af restriktions-matrice og lags?, warning=FALSE}
+# BOLIGPRIS - BNP - KREDIT - RENTEN } Spec 1
+Model1_test1_SVAR <- data.frame(HPcyklus, BNPcyklus ,KREDITcyklus, RENTEN30cyklus)
+colnames(Model1_test1_SVAR) <- c("HUSPRISEN", "BNP", "KREDIT", "RENTEN")
+bmat_test1_model1 <- diag(4)
+bmat_test1_model1[2,1]<-NA
+bmat_test1_model1[3,1:2]<-NA
+bmat_test1_model1[4,1:3]<-NA
+varmodel_test_1 <- VAR(Model1_test1_SVAR, p=6, type="const", exogen = DUMMY)
+colnames(bmat_test1_model1) <- colnames(Model1_test1_SVAR)
+rownames(bmat_test1_model1) <- colnames(Model1_test1_SVAR)
+bmat_test1_model1
+svarmodel_test1 <- SVAR(varmodel_test_1,Bmat = bmat_test1_model1)
+Svar_spec_test1 <- irf(svarmodel_test1, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+
+# RENTE - KREDIT - BOLIGPRISEN - BNP } Spec 2
+Model1_test2_SVAR <- data.frame(RENTEN30cyklus, KREDITcyklus ,HPcyklus, BNPcyklus)
+colnames(Model1_test2_SVAR) <- c("RENTEN", "KREDIT", "HUSPRISEN", "BNP")
+bmat_test2_model1 <- diag(4)
+bmat_test2_model1[2,1]<-NA
+bmat_test2_model1[3,1:2]<-NA
+bmat_test2_model1[4,1:3]<-NA
+varmodel_test_2 <- VAR(Model1_test2_SVAR, p=6, type="const", exogen = DUMMY)
+colnames(bmat_test2_model1) <- colnames(Model1_test2_SVAR)
+rownames(bmat_test2_model1) <- colnames(Model1_test2_SVAR)
+bmat_test2_model1
+svarmodel_test2 <- SVAR(varmodel_test_2,Bmat = bmat_test2_model1)
+Svar_spec_test2 <- irf(svarmodel_test2, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+
+# BNP - KREDIT - RENTEN - BOLIGPRIS } Spec 3
+Model1_test3_SVAR <- data.frame(BNPcyklus, KREDITcyklus ,RENTEN30cyklus, HPcyklus)
+colnames(Model1_test3_SVAR) <- c("BNP", "KREDIT", "RENTEN", "HUSPRISEN")
+bmat_test3_model1 <- diag(4)
+bmat_test3_model1[2,1]<-NA
+bmat_test3_model1[3,1:2]<-NA
+bmat_test3_model1[4,1:3]<-NA
+varmodel_test_3 <- VAR(Model1_test3_SVAR, p=6, type="const", exogen = DUMMY)
+colnames(bmat_test3_model1) <- colnames(Model1_test3_SVAR)
+rownames(bmat_test3_model1) <- colnames(Model1_test3_SVAR)
+bmat_test3_model1
+svarmodel_test3 <- SVAR(varmodel_test_3,Bmat = bmat_test3_model1)
+Svar_spec_test3 <- irf(svarmodel_test3, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+
+# KREDIT - BOLIGPRIS - RENTEN - BNP } Spec 4
+Model1_test4_SVAR <- data.frame(KREDITcyklus, HPcyklus ,RENTEN30cyklus, BNPcyklus)
+colnames(Model1_test4_SVAR) <- c("KREDIT", "HUSPRISEN", "RENTEN", "BNP")
+bmat_test4_model1 <- diag(4)
+bmat_test4_model1[2,1]<-NA
+bmat_test4_model1[3,1:2]<-NA
+bmat_test4_model1[4,1:3]<-NA
+varmodel_test_4 <- VAR(Model1_test4_SVAR, p=6, type="const", exogen = DUMMY)
+colnames(bmat_test4_model1) <- colnames(Model1_test4_SVAR)
+rownames(bmat_test4_model1) <- colnames(Model1_test4_SVAR)
+bmat_test4_model1
+svarmodel_test4 <- SVAR(varmodel_test_4,Bmat = bmat_test4_model1)
+Svar_spec_test4 <- irf(svarmodel_test4, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+
+# BNP - KREDIT - BOLIGPRIS - RENTE } Spec 5
+Model1_test5_SVAR <- data.frame(BNPcyklus, KREDITcyklus ,HPcyklus, RENTEN30cyklus)
+colnames(Model1_test5_SVAR) <- c("BNP", "KREDIT", "HUSPRISEN", "RENTEN")
+bmat_test5_model1 <- diag(4)
+bmat_test5_model1[2,1]<-NA
+bmat_test5_model1[3,1:2]<-NA
+bmat_test5_model1[4,1:3]<-NA
+varmodel_test_5 <- VAR(Model1_test5_SVAR, p=6, type="const", exogen = DUMMY)
+colnames(bmat_test5_model1) <- colnames(Model1_test5_SVAR)
+rownames(bmat_test5_model1) <- colnames(Model1_test5_SVAR)
+bmat_test5_model1
+svarmodel_test5 <- SVAR(varmodel_test_5,Bmat = bmat_test5_model1)
+Svar_spec_test5 <- irf(svarmodel_test5, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+
+# BNP - RENTE - BOLIGPRIS - KREDIT } Spec 6
+Model1_test6_SVAR <- data.frame(BNPcyklus, RENTEN30cyklus ,HPcyklus, KREDITcyklus)
+colnames(Model1_test6_SVAR) <- c("BNP", "RENTEN", "HUSPRISEN", "KREDIT")
+bmat_test6_model1 <- diag(4)
+bmat_test6_model1[2,1]<-NA
+bmat_test6_model1[3,1:2]<-NA
+bmat_test6_model1[4,1:3]<-NA
+varmodel_test_6 <- VAR(Model1_test6_SVAR, p=6, type="const", exogen = DUMMY)
+colnames(bmat_test6_model1) <- colnames(Model1_test6_SVAR)
+rownames(bmat_test6_model1) <- colnames(Model1_test6_SVAR)
+bmat_test6_model1
+svarmodel_test6 <- SVAR(varmodel_test_6,Bmat = bmat_test6_model1)
+Svar_spec_test6 <- irf(svarmodel_test6, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+
+# RENTE - BOLIGPRIS - BNP - KREDIT } Spec 7
+Model1_test7_SVAR <- data.frame(RENTEN30cyklus, HPcyklus ,BNPcyklus, KREDITcyklus)
+colnames(Model1_test7_SVAR) <- c("RENTEN", "HUSPRISEN", "BNP", "KREDIT")
+bmat_test7_model1 <- diag(4)
+bmat_test7_model1[2,1]<-NA
+bmat_test7_model1[3,1:2]<-NA
+bmat_test7_model1[4,1:3]<-NA
+varmodel_test_7 <- VAR(Model1_test7_SVAR, p=6, type="const", exogen = DUMMY)
+colnames(bmat_test7_model1) <- colnames(Model1_test7_SVAR)
+rownames(bmat_test7_model1) <- colnames(Model1_test7_SVAR)
+bmat_test7_model1
+svarmodel_test7 <- SVAR(varmodel_test_7,Bmat = bmat_test7_model1)
+Svar_spec_test7 <- irf(svarmodel_test7, response = "HUSPRISEN", ortho = T, n.ahead = 40, cumulative = F, ci = 0.67, runs = 1000)
+```
+
+```{r Data for varrierende specifikationer}
+Svar_spec_data <- as.data.frame(c(0:40))
+Svar_spec_data <- rename(Svar_spec_data, c("kvartaler"="c(0:40)"))
+### BNP
+Svar_spec_data$BNP1 <- Svar_spec_test1$irf$BNP
+Svar_spec_data$BNP2 <- Svar_spec_test2$irf$BNP
+Svar_spec_data$BNP3 <- Svar_spec_test3$irf$BNP
+Svar_spec_data$BNP4 <- Svar_spec_test4$irf$BNP
+Svar_spec_data$BNP5 <- Svar_spec_test5$irf$BNP
+Svar_spec_data$BNP6 <- Svar_spec_test6$irf$BNP
+Svar_spec_data$BNP7 <- Svar_spec_test7$irf$BNP
+
+### RENTEN
+Svar_spec_data$RENTEN1 <- Svar_spec_test1$irf$RENTEN
+Svar_spec_data$RENTEN2 <- Svar_spec_test2$irf$RENTEN
+Svar_spec_data$RENTEN3 <- Svar_spec_test3$irf$RENTEN
+Svar_spec_data$RENTEN4 <- Svar_spec_test4$irf$RENTEN
+Svar_spec_data$RENTEN5 <- Svar_spec_test5$irf$RENTEN
+Svar_spec_data$RENTEN6 <- Svar_spec_test6$irf$RENTEN
+Svar_spec_data$RENTEN7 <- Svar_spec_test7$irf$RENTEN
+
+
+### KREDIT
+Svar_spec_data$KREDIT1 <- Svar_spec_test1$irf$KREDIT
+Svar_spec_data$KREDIT2 <- Svar_spec_test2$irf$KREDIT
+Svar_spec_data$KREDIT3 <- Svar_spec_test3$irf$KREDIT
+Svar_spec_data$KREDIT4 <- Svar_spec_test4$irf$KREDIT
+Svar_spec_data$KREDIT5 <- Svar_spec_test5$irf$KREDIT
+Svar_spec_data$KREDIT6 <- Svar_spec_test6$irf$KREDIT
+Svar_spec_data$KREDIT7 <- Svar_spec_test7$irf$KREDIT
+
+### BOLIGPRISEN
+Svar_spec_data$HP1 <- Svar_spec_test1$irf$HUSPRISEN
+Svar_spec_data$HP2 <- Svar_spec_test2$irf$HUSPRISEN
+Svar_spec_data$HP3 <- Svar_spec_test3$irf$HUSPRISEN
+Svar_spec_data$HP4 <- Svar_spec_test4$irf$HUSPRISEN
+Svar_spec_data$HP5 <- Svar_spec_test5$irf$HUSPRISEN
+Svar_spec_data$HP6 <- Svar_spec_test6$irf$HUSPRISEN
+Svar_spec_data$HP7 <- Svar_spec_test7$irf$HUSPRISEN
+```
+
+
+
+```{r Plot af varrierende speficifaktioner}
+## BNP
+BNP_specifikationer_model1 <- 
+  ggplot(Svar_spec_data)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BNP1, x=kvartaler, color = "HP-BNP-KRE-REN")) +
+  geom_line(aes(y=BNP2, x=kvartaler, color = "REN-KRE-HP-BNP")) +
+  geom_line(aes(y=BNP3, x=kvartaler, color = "BNP-KRE-REN-HP")) +
+  geom_line(aes(y=BNP4, x=kvartaler, color = "KRE-HP-REN-BNP")) +
+  geom_line(aes(y=BNP5, x=kvartaler, color = "BNP-KRE-HP-REN")) +
+  geom_line(aes(y=BNP6, x=kvartaler, color = "BNP-REN-HP-KRE")) +
+  geom_line(aes(y=BNP7, x=kvartaler, color = "REN-HP-BNP-KRE")) +
+  scale_color_manual(name='Specifikation',
+                     breaks=c('HP-BNP-KRE-REN', 'REN-KRE-HP-BNP', 'BNP-KRE-REN-HP',
+                              'KRE-HP-REN-BNP', 'BNP-KRE-HP-REN', 'BNP-REN-HP-KRE',
+                              'REN-HP-BNP-KRE'),
+                     values=c('HP-BNP-KRE-REN'='red', 'REN-KRE-HP-BNP'='blue', 'BNP-KRE-REN-HP'='green',
+                              'KRE-HP-REN-BNP'='cyan', 'BNP-KRE-HP-REN'='lightpink', 'BNP-REN-HP-KRE'='orange',
+                              'REN-HP-BNP-KRE'='black'))+
+ labs(title = "Varrierende SVAR matricer ved stød til BNP", x="Lag (Måneder)", y="Respons fra boligprisen", caption = "Egne beregninger", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+### RENTE
+RENTE_specifikationer_model1 <- 
+  ggplot(Svar_spec_data)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=RENTEN1, x=kvartaler, color = "HP-BNP-KRE-REN")) +
+  geom_line(aes(y=RENTEN2, x=kvartaler, color = "REN-KRE-HP-BNP")) +
+  geom_line(aes(y=RENTEN3, x=kvartaler, color = "BNP-KRE-REN-HP")) +
+  geom_line(aes(y=RENTEN4, x=kvartaler, color = "KRE-HP-REN-BNP")) +
+  geom_line(aes(y=RENTEN5, x=kvartaler, color = "BNP-KRE-HP-REN")) +
+  geom_line(aes(y=RENTEN6, x=kvartaler, color = "BNP-REN-HP-KRE")) +
+  geom_line(aes(y=RENTEN7, x=kvartaler, color = "REN-HP-BNP-KRE")) +
+  scale_color_manual(name='Specifikation',
+                     breaks=c('HP-BNP-KRE-REN', 'REN-KRE-HP-BNP', 'BNP-KRE-REN-HP',
+                              'KRE-HP-REN-BNP', 'BNP-KRE-HP-REN', 'BNP-REN-HP-KRE',
+                              'REN-HP-BNP-KRE'),
+                     values=c('HP-BNP-KRE-REN'='red', 'REN-KRE-HP-BNP'='blue', 'BNP-KRE-REN-HP'='green',
+                              'KRE-HP-REN-BNP'='cyan', 'BNP-KRE-HP-REN'='lightpink', 'BNP-REN-HP-KRE'='orange',
+                              'REN-HP-BNP-KRE'='black'))+
+  labs(title = "Varrierende SVAR matricer ved stød til renten", x="Lag (Måneder)", y="Respons fra boligprisen", caption = "Egne beregninger", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+### KREDIT
+KREDIT_specifikationer_model1 <- 
+  ggplot(Svar_spec_data)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=KREDIT1, x=kvartaler, color = "HP-BNP-KRE-REN")) +
+  geom_line(aes(y=KREDIT2, x=kvartaler, color = "REN-KRE-HP-BNP")) +
+  geom_line(aes(y=KREDIT3, x=kvartaler, color = "BNP-KRE-REN-HP")) +
+  geom_line(aes(y=KREDIT4, x=kvartaler, color = "KRE-HP-REN-BNP")) +
+  geom_line(aes(y=KREDIT5, x=kvartaler, color = "BNP-KRE-HP-REN")) +
+  geom_line(aes(y=KREDIT6, x=kvartaler, color = "BNP-REN-HP-KRE")) +
+  geom_line(aes(y=KREDIT7, x=kvartaler, color = "REN-HP-BNP-KRE")) +
+  scale_color_manual(name='Specifikation',
+                     breaks=c('HP-BNP-KRE-REN', 'REN-KRE-HP-BNP', 'BNP-KRE-REN-HP',
+                              'KRE-HP-REN-BNP', 'BNP-KRE-HP-REN', 'BNP-REN-HP-KRE',
+                              'REN-HP-BNP-KRE'),
+                     values=c('HP-BNP-KRE-REN'='red', 'REN-KRE-HP-BNP'='blue', 'BNP-KRE-REN-HP'='green',
+                              'KRE-HP-REN-BNP'='cyan', 'BNP-KRE-HP-REN'='lightpink', 'BNP-REN-HP-KRE'='orange',
+                              'REN-HP-BNP-KRE'='black'))+
+  labs(title = "Varrierende SVAR matricer ved stød til kredit", x="Lag (Måneder)", y="Respons fra boligprisen", caption = "Egne beregninger", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+### BOLIGPRISEN
+HP_specifikationer_model1 <- 
+  ggplot(Svar_spec_data)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=HP1, x=kvartaler, color = "HP-BNP-KRE-REN")) +
+  geom_line(aes(y=HP2, x=kvartaler, color = "REN-KRE-HP-BNP")) +
+  geom_line(aes(y=HP3, x=kvartaler, color = "BNP-KRE-REN-HP")) +
+  geom_line(aes(y=HP4, x=kvartaler, color = "KRE-HP-REN-BNP")) +
+  geom_line(aes(y=HP5, x=kvartaler, color = "BNP-KRE-HP-REN")) +
+  geom_line(aes(y=HP6, x=kvartaler, color = "BNP-REN-HP-KRE")) +
+  geom_line(aes(y=HP7, x=kvartaler, color = "REN-HP-BNP-KRE")) +
+  scale_color_manual(name='Specifikation',
+                     breaks=c('HP-BNP-KRE-REN', 'REN-KRE-HP-BNP', 'BNP-KRE-REN-HP',
+                              'KRE-HP-REN-BNP', 'BNP-KRE-HP-REN', 'BNP-REN-HP-KRE',
+                              'REN-HP-BNP-KRE'),
+                     values=c('HP-BNP-KRE-REN'='red', 'REN-KRE-HP-BNP'='blue', 'BNP-KRE-REN-HP'='green',
+                              'KRE-HP-REN-BNP'='cyan', 'BNP-KRE-HP-REN'='lightpink', 'BNP-REN-HP-KRE'='orange',
+                              'REN-HP-BNP-KRE'='black'))+
+  labs(title = "Varrierende SVAR matricer ved stød til Boligpriserne", x="Lag (Måneder)", y="Respons fra boligprisen", caption = "Egne beregninger", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+model1_varrierende_spec <- ggarrange(
+BNP_specifikationer_model1,
+RENTE_specifikationer_model1,
+KREDIT_specifikationer_model1,
+HP_specifikationer_model1, ncol=2, nrow=2, common.legend = TRUE, legend="bottom") + bgcolor("#f3f3f3")
+
+ggexport(
+  model1_varrierende_spec,
+  plotlist = NULL,
+  filename = "Specifikation model 1.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 1500,
+  height = 1200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+
+```
+
+
+
+
+## Model 2
+```{r model 2 indlæs variable og sæsonkorrigering}
+# Tidsserier
+dataaa <- read_excel("~/Desktop/Universitet/Onedrive AAU/OneDrive - Aalborg Universitet/Bachelorprojekt/Igangværende projekt/samletdata.xlsx", sheet = "model2")
+
+tid_model2 <- dataaa$Tid[25:180]
+G_boligprisindeks2 <- ts(log(dataaa$realpris[25:180]), start = c(2006,1), frequency = 12)
+G_Forventninger <- ts(dataaa$forvent[25:180], start = c(2006,1), frequency = 12)
+G_Udbud <- ts(log(dataaa$udbud[25:180]), start = c(2006,1), frequency = 12)
+
+## Sæsonkorrigering
+boligprisindeks2 <- G_boligprisindeks2 - decompose(G_boligprisindeks2)$seasonal
+Forventninger <- G_Forventninger - decompose(G_Forventninger)$seasonal
+Udbud <- G_Udbud - decompose(G_Udbud)$seasonal
+## Sæson data
+
+```
+
+```{r stationær test}
+# Pris
+ur.df(boligprisindeks2, type = "trend", selectlags = "AIC", lags = 10)@cval
+ur.df(boligprisindeks2, type = "trend", selectlags = "AIC", lags = 10)@teststat
+ur.df(boligprisindeks2, type = "drift", selectlags = "AIC", lags = 10)@cval
+ur.df(boligprisindeks2, type = "drift", selectlags = "AIC", lags = 10)@teststat
+ur.df(boligprisindeks2, type = "none", selectlags = "AIC", lags = 10)@cval
+ur.df(boligprisindeks2, type = "none", selectlags = "AIC", lags = 10)@teststat
+
+# Forventninger
+ur.df(Forventninger, type = "trend", selectlags = "AIC", lags = 10)@cval
+ur.df(Forventninger, type = "trend", selectlags = "AIC", lags = 10)@teststat
+ur.df(Forventninger, type = "drift", selectlags = "AIC", lags = 10)@cval
+ur.df(Forventninger, type = "drift", selectlags = "AIC", lags = 10)@teststat
+ur.df(Forventninger, type = "none", selectlags = "AIC", lags = 10)@cval
+ur.df(Forventninger, type = "none", selectlags = "AIC", lags = 10)@teststat
+
+# Udbud
+ur.df(Udbud, type = "trend", selectlags = "AIC", lags = 10)@cval
+ur.df(Udbud, type = "trend", selectlags = "AIC", lags = 10)@teststat
+ur.df(Udbud, type = "drift", selectlags = "AIC", lags = 10)@cval
+ur.df(Udbud, type = "drift", selectlags = "AIC", lags = 10)@teststat
+ur.df(Udbud, type = "none", selectlags = "AIC", lags = 10)@cval
+ur.df(Udbud, type = "none", selectlags = "AIC", lags = 10)@teststat
+
+# PP-test
+PP.test(boligprisindeks2)
+PP.test(Forventninger)
+PP.test(Udbud)
+```
+
+
+
+```{r HP FILTER}
+lambda = 14400
+boligprisindekscyklus2 <- hpfilter(boligprisindeks2, lambda, type = "lambda", drift = T)$cycle
+# Forventninger.2cyklus <- hpfilter(Forventninger.2, lambda, type = "lambda")$cycle
+Udbudcyklus <- hpfilter(Udbud, lambda, type = "lambda", drift = T)$cycle
+# huslejecyklus <- hpfilter(husleje.2, lambda, type = "lambda")$cycle
+```
+
+```{r 2. model reducerede var}
+model2_ramme <- data.frame(Udbudcyklus, boligprisindekscyklus2, Forventninger)
+colnames(model2_ramme) <- c("Udbud","Boligpris","Forventninger")
+lags_model2 <- VARselect(model2_ramme, lag.max = 9, type = c("const","trend","both","none"))$selection
+
+stargazer(lags_model2, type="text") #, out = "Lags-model2.html")
+model2 <- VAR(model2_ramme, type = "both", p= lags_model2[1])
+roots(model2)
+stargazer(model2$varresult, title="Model 2 estimater",
+          single.row = TRUE, 
+          type ="text", 
+          report = "vc*",
+          add.lines = list(c("AIC",round(AIC(model2$varresult$Udbud)), round(AIC(model2$varresult$Boligpris)), round(AIC(model2$varresult$Forventninger)))),
+          omit.table.layout = "ld", 
+          table.layout = "=m=c=!t-!as=!n",
+          model.numbers = F,
+          header = TRUE, 
+          df=FALSE, 
+          digits=3,
+          column.labels = colnames(model2_ramme),
+          align = T,
+          out = "model2estimater.htm")
+
+```
+
+
+```{r Krydskorrelationer}
+model2_autokor <- as.data.frame(c(-24:24))
+model2_autokor <- rename(model2_autokor, c("Måneder"="c(-24:24)"))
+
+
+model2_autokor$BOLIGPRIS_BOLIGPRIS <- ccf(boligprisindekscyklus2,boligprisindekscyklus2,plot=F, lag.max = 24)$acf
+model2_autokor$FORV_FORV <- ccf(Forventninger,Forventninger,plot=F, lag.max = 24)$acf
+model2_autokor$UDBUD_UDBUD <- ccf(Udbudcyklus,Udbudcyklus,plot=F, lag.max = 24)$acf
+
+model2_autokor$BOLIGPRIS_FORV <- ccf(boligprisindekscyklus2, Forventninger,plot=F, lag.max = 24)$acf
+model2_autokor$BOLIGPRIS_UDBUD <- ccf(boligprisindekscyklus2, Udbudcyklus,plot=F, lag.max = 24)$acf
+
+model2_autokor$FORV_BOLIGPRIS <- ccf(Forventninger, boligprisindekscyklus2,plot=F, lag.max = 24)$acf
+model2_autokor$FORV_UDBUD <- ccf(Forventninger, Udbudcyklus,plot=F, lag.max = 24)$acf
+
+model2_autokor$UDBUD_FORV <- ccf(Udbudcyklus, Forventninger,plot=F, lag.max = 24)$acf
+model2_autokor$UDBUD_BOLIGPRIS <- ccf(Udbudcyklus, boligprisindekscyklus2,plot=F, lag.max = 24)$acf
+
+## Plots
+Autokor_model2 <- ggplot(model2_autokor)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_line(aes(y=BOLIGPRIS_BOLIGPRIS, x=Måneder, color = "Boligpris")) +
+  geom_line(aes(y=FORV_FORV, x=Måneder, color = "Forventninger")) +   
+  geom_line(aes(y=UDBUD_UDBUD, x=Måneder, color = "Udbuddet")) +
+  scale_color_manual(name='Variable',
+                     breaks=c('Boligpris', 'Forventninger', 'Udbuddet'),
+                     values=c('Boligpris'='red', 'Forventninger'='orange', 'Udbuddet'='green'))+
+  labs(title = "Krydskorrelationer: HUSPRIS", x="Lag(1 lag = 4 Kvartaler)", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th 
+
+
+Korrelogram_Boligpris <- ggplot(model2_autokor)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_line(aes(y=BOLIGPRIS_FORV, x=Måneder, color = "Forventninger")) +
+  geom_line(aes(y=BOLIGPRIS_UDBUD, x=Måneder, color = "Udbuddet")) +   
+   scale_color_manual(name='Variable',
+                     breaks=c('Forventninger', 'Udbuddet'),
+                     values=c( 'Forventninger'='orange', 'Udbuddet'='green'))+
+  labs(title = "Krydskorrelationer med Boligpriserne", x="Lag (Måneder)", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th 
+
+Korrelogram_Forventninger <- ggplot(model2_autokor)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_line(aes(y=FORV_BOLIGPRIS, x=Måneder, color = "Boligprisen")) +
+  geom_line(aes(y=FORV_UDBUD, x=Måneder, color = "Udbuddet")) +   
+   scale_color_manual(name='Variable',
+                     breaks=c('Boligprisen', 'Udbuddet'),
+                     values=c( 'Boligprisen'='red', 'Udbuddet'='green'))+
+  labs(title = "Krydskorrelationer med Forventningerne", x="Lag (Måneder)", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th 
+
+
+Korrelogram_Udbud <- ggplot(model2_autokor)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_line(aes(y=UDBUD_FORV, x=Måneder, color = "Forventninger")) +
+  geom_line(aes(y=UDBUD_BOLIGPRIS, x=Måneder, color = "Boligprisen")) +   
+   scale_color_manual(name='Variable',
+                     breaks=c('Boligprisen', 'Forventninger'),
+                     values=c( 'Boligprisen'='red', 'Forventninger'='orange'))+
+  labs(title = "Krydskorrelationer med Udbuddet", x="Lag (Måneder)", y="Korrelation", caption = "", color=NULL)+ theme(legend.position="bottom") + theme(panel.grid.minor.x = element_blank()) + th 
+
+
+kryds_samlet_model2 <- ggarrange(Korrelogram_Boligpris, Korrelogram_Forventninger,Korrelogram_Udbud, ncol = 1, nrow = 3, common.legend = F, legend = "bottom", legend.grob = get_legend(Autokor_model2))  + bgcolor("#f3f3f3")
+
+ggexport(
+  kryds_samlet_model2,
+  plotlist = NULL,
+  filename = "svarmodel2krydskorrelationer.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 1500,
+  height = 1200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+```
+
+```{r Granger causality model 2}
+grangertest(Udbudcyklus,boligprisindekscyklus2, order = 2)
+grangertest(Udbudcyklus,Forventninger, order = 2)
+
+grangertest(boligprisindekscyklus2,Udbudcyklus, order = 2)
+grangertest(boligprisindekscyklus2,Forventninger, order = 2)
+
+grangertest(Forventninger,boligprisindekscyklus2, order = 2)
+grangertest(Forventninger,Udbudcyklus, order = 2)
+
+```
+
+
+```{r SVAR MODEL2, warning=FALSE}
+restriktionsmatrice <- diag(3)
+restriktionsmatrice[2,1]<-NA
+restriktionsmatrice[3,1:2]<-NA
+colnames(restriktionsmatrice) <- colnames(model2_ramme)
+rownames(restriktionsmatrice) <- colnames(model2_ramme)
+restriktionsmatrice
+
+# Model
+model2_SVAR <- SVAR(model2,Bmat = restriktionsmatrice)
+
+# Respons
+model2_IRF <- irf(model2_SVAR, response = "Boligpris", ortho = F, n.ahead = 48, cumulative = F, ci = 0.66, runs = 1000)
+```
+
+```{r Kumulativt stød model 2, warning=FALSE}
+model2_IRF_cumulative <- irf(model2_SVAR, response = "Boligpris", ortho = T, n.ahead = 48, cumulative = T, ci = 0.66, runs = 1000)
+```
+
+
+```{r MODEL 2 SVAR DATASÆT}
+model2_IRF_data <- as.data.frame(c(0:48))
+model2_IRF_data <- rename(model2_IRF_data, c("Måneder"="c(0:48)"))
+model2_IRF_data$Måneder <- unlist(as.data.frame(c(0:48)))
+
+model2_IRF_data$UDBUD_SVAR <- as.numeric(model2_IRF$irf$Udbud)
+model2_IRF_data$LOWER_UDBUD_SVAR <- model2_IRF$Lower$Udbud
+model2_IRF_data$UPPER_UDBUD_SVAR <- model2_IRF$Upper$Udbud
+
+model2_IRF_data$FORVENTNINGER_SVAR <- model2_IRF$irf$Forventninger
+model2_IRF_data$LOWER_FORVENTNINGER_SVAR <- model2_IRF$Lower$Forventninger
+model2_IRF_data$UPPER_FORVENTNINGER_SVAR <- model2_IRF$Upper$Forventninger
+
+model2_IRF_data$BOLIGPRISEN_SVAR <- model2_IRF$irf$Boligpris
+model2_IRF_data$LOWER_BOLIGPRISEN_SVAR <- model2_IRF$Lower$Boligpris
+model2_IRF_data$UPPER_BOLIGPRISEN_SVAR <- model2_IRF$Upper$Boligpris
+```
+
+```{r MODEL 2 SVAR DATASÆT KUMULATIVT}
+model2_IRF_data_cumulativ <- as.data.frame(c(0:48))
+model2_IRF_data_cumulativ <- rename(model2_IRF_data_cumulativ, c("Måneder"="c(0:48)"))
+model2_IRF_data_cumulativ$Måneder <- unlist(as.data.frame(c(0:48)))
+
+model2_IRF_data_cumulativ$UDBUD_SVAR <- as.numeric(model2_IRF_cumulative$irf$Udbud)
+model2_IRF_data_cumulativ$LOWER_UDBUD_SVAR <- model2_IRF_cumulative$Lower$Udbud
+model2_IRF_data_cumulativ$UPPER_UDBUD_SVAR <- model2_IRF_cumulative$Upper$Udbud
+
+model2_IRF_data_cumulativ$FORVENTNINGER_SVAR <- model2_IRF_cumulative$irf$Forventninger
+model2_IRF_data_cumulativ$LOWER_FORVENTNINGER_SVAR <- model2_IRF_cumulative$Lower$Forventninger
+model2_IRF_data_cumulativ$UPPER_FORVENTNINGER_SVAR <- model2_IRF_cumulative$Upper$Forventninger
+
+model2_IRF_data_cumulativ$BOLIGPRISEN_SVAR <- model2_IRF_cumulative$irf$Boligpris
+model2_IRF_data_cumulativ$LOWER_BOLIGPRISEN_SVAR <- model2_IRF_cumulative$Lower$Boligpris
+model2_IRF_data_cumulativ$UPPER_BOLIGPRISEN_SVAR <- model2_IRF_cumulative$Upper$Boligpris
+```
+
+
+```{r SVAR IRF PLOTS}
+SVAR_UDBUD_impulse <- ggplot(model2_IRF_data)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=UDBUD_SVAR, x=Måneder, color = "UDBUD_SVAR"), color = "red") +
+  geom_ribbon(aes(y=UDBUD_SVAR, x=Måneder,xmin = 0, xmax = 41, ymin=LOWER_UDBUD_SVAR, ymax = UPPER_UDBUD_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(model2_IRF_data$Måneder, n = 15)) + 
+  labs(title = "SVAR Impulse fra Udbuddet",subtitle = "67% konfidensinterval", x="Lag (Måneder)", y="Respons fra Boligpris", color=NULL) +
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_FORVENTNINGER_impulse <- ggplot(model2_IRF_data)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=FORVENTNINGER_SVAR, x=Måneder, color = "FORVENTNINGER_SVAR"), color = "red") +
+  geom_ribbon(aes(y=FORVENTNINGER_SVAR, x=Måneder,xmin = 0, xmax = 41, ymin=LOWER_FORVENTNINGER_SVAR, ymax = UPPER_FORVENTNINGER_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(model2_IRF_data$Måneder, n = 15)) + 
+  labs(title = "SVAR Impulse fra Forventninger",subtitle = "67% konfidensinterval", x="Lag (Måneder)", y="Respons fra Boligpris", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_BOLIGPRISINDEKS_impulse <- ggplot(model2_IRF_data)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BOLIGPRISEN_SVAR, x=Måneder, color = "BOLIGPRISEN_SVAR"), color = "red") +
+  geom_ribbon(aes(y=BOLIGPRISEN_SVAR, x=Måneder,xmin = 0, xmax = 41, ymin=LOWER_BOLIGPRISEN_SVAR, ymax = UPPER_BOLIGPRISEN_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(model2_IRF_data$Måneder, n = 15)) + 
+  labs(title = "SVAR Impulse fra Boligprisen",subtitle = "67% konfidensinterval", x="Lag (Måneder)", y="Respons fra Boligprisen", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SAMLET_model2_SVAR_plot <- ggarrange(SVAR_UDBUD_impulse, ggarrange(SVAR_FORVENTNINGER_impulse, SVAR_BOLIGPRISINDEKS_impulse, nrow = 1, ncol = 2), ncol = 1, nrow = 2)
+SAMLET_model2_SVAR_plot
+
+ggexport(
+  SAMLET_model2_SVAR_plot,
+  plotlist = NULL,
+  filename = "Svar model 2 IRF plotkvali.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 1500,
+  height = 1200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+```
+
+```{r Model 2 - kumulative plots} 
+SVAR_UDBUD_impulse_cumulativt <- ggplot(model2_IRF_data_cumulativ)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=UDBUD_SVAR, x=Måneder, color = "UDBUD_SVAR"), color = "red") +
+  geom_ribbon(aes(y=UDBUD_SVAR, x=Måneder,xmin = 0, xmax = 41, ymin=LOWER_UDBUD_SVAR, ymax = UPPER_UDBUD_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(model2_IRF_data$Måneder, n = 15)) + 
+  labs(title = "Kumulative SVAR Impulse fra Udbuddet",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris", color=NULL) +
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_FORVENTNINGER_impulse_cumulativt <- ggplot(model2_IRF_data_cumulativ)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=FORVENTNINGER_SVAR, x=Måneder, color = "FORVENTNINGER_SVAR"), color = "red") +
+  geom_ribbon(aes(y=FORVENTNINGER_SVAR, x=Måneder,xmin = 0, xmax = 41, ymin=LOWER_FORVENTNINGER_SVAR, ymax = UPPER_FORVENTNINGER_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(model2_IRF_data$Måneder, n = 15)) + 
+  labs(title = "Kumulative SVAR Impulse fra Forventninger",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligpris", color=NULL) + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SVAR_BOLIGPRISINDEKS_impulse_cumulativt <- ggplot(model2_IRF_data_cumulativ)+
+  geom_line(aes(x=Måneder, y=0))+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BOLIGPRISEN_SVAR, x=Måneder, color = "BOLIGPRISEN_SVAR"), color = "red") +
+  geom_ribbon(aes(y=BOLIGPRISEN_SVAR, x=Måneder,xmin = 0, xmax = 41, ymin=LOWER_BOLIGPRISEN_SVAR, ymax = UPPER_BOLIGPRISEN_SVAR), alpha=0.6, fill = "gray") + 
+  scale_x_continuous(breaks = pretty(model2_IRF_data$Måneder, n = 15)) + 
+  labs(title = "Kumulative SVAR Impulse fra Boligprisen",subtitle = "67% konfidensinterval", x="Lag", y="Respons fra Boligprisen", color=NULL, caption = "Egne beregninger") + 
+  theme(panel.grid.minor.x = element_blank()) + th + theme(plot.margin = margin(0.3, 0.3, 0.09, 0.3, "cm"))
+
+SAMLET_model2_SVAR_plot_cumulativt <- ggarrange(SVAR_UDBUD_impulse_cumulativt, ggarrange(SVAR_FORVENTNINGER_impulse_cumulativt, SVAR_BOLIGPRISINDEKS_impulse_cumulativt, nrow = 1, ncol = 2), ncol = 1, nrow = 2)
+SAMLET_model2_SVAR_plot_cumulativt
+
+ggexport(
+  SAMLET_model2_SVAR_plot_cumulativt,
+  plotlist = NULL,
+  filename = "Svar model 2 IRF cumulativt.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 1800,
+  height = 1200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+```
+
+```{r Diagnose}
+serial.test(model2, lags.pt = 10) 
+arch.test(model2, lags.multi = 2) 
+normality.test(model2, multivariate.only = F)
+plot(stability(model2, type = "OLS-CUSUM", dynamic = T))
+```
+
+```{r Svar matrice specifikations robusthed - kørsel, warning=FALSE}
+# Udbud - Forventnigner - Boligprisen
+SVAR2_spec_test1 <- data.frame(Udbudcyklus, Forventninger,boligprisindekscyklus2)
+colnames(SVAR2_spec_test1) <- c("Udbud","Forventninger", "Boligprisen")
+SVAR2_spec_model1 <- VAR(SVAR2_spec_test1, type = "both", p= 2)
+#matrice
+restriktionsmatrice_tes1 <- diag(3)
+restriktionsmatrice_tes1[2,1]<-NA
+restriktionsmatrice_tes1[3,1:2]<-NA
+colnames(restriktionsmatrice_tes1) <- colnames(SVAR2_spec_test1)
+rownames(restriktionsmatrice_tes1) <- colnames(SVAR2_spec_test1)
+restriktionsmatrice_tes1
+# Model
+SVAR2_spec_test1_model <- SVAR(SVAR2_spec_model1,Bmat = restriktionsmatrice_tes1)
+# Respons
+SVAR2_spec_test1_IRF <- irf(SVAR2_spec_test1_model, response = "Boligprisen", ortho = T, n.ahead = 48, cumulative = F, ci = 0.66, runs = 1000)
+
+# Forventninger - Boligprisen - Udbuddet
+SVAR2_spec_test2 <- data.frame(Forventninger, boligprisindekscyklus2, Udbudcyklus)
+colnames(SVAR2_spec_test2) <- c("Forventninger","Boligprisen", "Udbud")
+SVAR2_spec_model2 <- VAR(SVAR2_spec_test2, type = "both", p= 2)
+#matrice
+restriktionsmatrice_tes2 <- diag(3)
+restriktionsmatrice_tes2[2,1]<-NA
+restriktionsmatrice_tes2[3,1:2]<-NA
+colnames(restriktionsmatrice_tes2) <- colnames(SVAR2_spec_test2)
+rownames(restriktionsmatrice_tes2) <- colnames(SVAR2_spec_test2)
+restriktionsmatrice_tes2
+# Model
+SVAR2_spec_test2_model <- SVAR(SVAR2_spec_model2,Bmat = restriktionsmatrice_tes2)
+# Respons
+SVAR2_spec_test2_IRF <- irf(SVAR2_spec_test2_model, response = "Boligprisen", ortho = T, n.ahead = 48, cumulative = F, ci = 0.66, runs = 1000)
+
+# Boligprisen - Forventninger - Udbuddet
+SVAR2_spec_test3 <- data.frame(boligprisindekscyklus2, Forventninger ,Udbudcyklus)
+colnames(SVAR2_spec_test3) <- c("Boligprisen","Forventninger", "Udbud")
+SVAR2_spec_model3 <- VAR(SVAR2_spec_test3, type = "both", p= 2)
+#matrice
+restriktionsmatrice_tes3 <- diag(3)
+restriktionsmatrice_tes3[2,1]<-NA
+restriktionsmatrice_tes3[3,1:2]<-NA
+colnames(restriktionsmatrice_tes3) <- colnames(SVAR2_spec_test3)
+rownames(restriktionsmatrice_tes3) <- colnames(SVAR2_spec_test3)
+restriktionsmatrice_tes3
+# Model
+SVAR2_spec_test3_model <- SVAR(SVAR2_spec_model3,Bmat = restriktionsmatrice_tes3)
+# Respons
+SVAR2_spec_test3_IRF <- irf(SVAR2_spec_test3_model, response = "Boligprisen", ortho = T, n.ahead = 48, cumulative = F, ci = 0.66, runs = 1000)
+```
+
+```{r Robustheds datasæt model 2}
+SVAR2_datasæt_robusthed <- as.data.frame(c(0:48))
+SVAR2_datasæt_robusthed <- rename(SVAR2_datasæt_robusthed, c("Måneder"="c(0:48)"))
+
+# UDBUD
+SVAR2_datasæt_robusthed$UDBUD1 <- SVAR2_spec_test1_IRF$irf$Udbud
+SVAR2_datasæt_robusthed$UDBUD2 <- SVAR2_spec_test2_IRF$irf$Udbud
+SVAR2_datasæt_robusthed$UDBUD3 <- SVAR2_spec_test3_IRF$irf$Udbud
+
+# FORVENTNINGER
+SVAR2_datasæt_robusthed$FORVENT1 <- SVAR2_spec_test1_IRF$irf$Forventninger
+SVAR2_datasæt_robusthed$FORVENT2 <- SVAR2_spec_test2_IRF$irf$Forventninger
+SVAR2_datasæt_robusthed$FORVENT3 <- SVAR2_spec_test3_IRF$irf$Forventninger
+
+# BOLIGPRIS
+SVAR2_datasæt_robusthed$BOLIGPRIS1 <- SVAR2_spec_test1_IRF$irf$Boligprisen
+SVAR2_datasæt_robusthed$BOLIGPRIS2 <- SVAR2_spec_test2_IRF$irf$Boligprisen
+SVAR2_datasæt_robusthed$BOLIGPRIS3 <- SVAR2_spec_test3_IRF$irf$Boligprisen
+```
+
+```{r Plots af varrierende matricer model 2}
+### UDBUD
+model2_specifikation1 <- 
+  ggplot(SVAR2_datasæt_robusthed)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=UDBUD1, x=Måneder, color = "UD-FORV-HP")) +
+  geom_line(aes(y=UDBUD2, x=Måneder, color = "FORV-HP-UD")) +
+  geom_line(aes(y=UDBUD3, x=Måneder, color = "HP-FORV-UD")) +
+  scale_color_manual(name='Specifikation',
+                     breaks=c('UD-FORV-HP', 'FORV-HP-UD', 'HP-FORV-UD'),
+                     values=c('UD-FORV-HP'='red', 'FORV-HP-UD'='blue', 'HP-FORV-UD'='green'))+
+  labs(title = "Stød - Udbuddet", x="Lag (Måneder)", y="Respons fra boligprisen", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+
+### FORVENTNINGER
+model2_specifikation2 <- 
+  ggplot(SVAR2_datasæt_robusthed)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=FORVENT1, x=Måneder, color = "UD-FORV-HP")) +
+  geom_line(aes(y=FORVENT2, x=Måneder, color = "FORV-HP-UD")) +
+  geom_line(aes(y=FORVENT3, x=Måneder, color = "HP-FORV-UD")) +
+  scale_color_manual(name='Specifikation',
+                     breaks=c('UD-FORV-HP', 'FORV-HP-UD', 'HP-FORV-UD'),
+                     values=c('UD-FORV-HP'='red', 'FORV-HP-UD'='blue', 'HP-FORV-UD'='green'))+
+  labs(title = "Stød - Forventninger", x="Lag (Måneder)", y="Respons fra boligprisen", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+
+### BOLIGPRISEN
+model2_specifikation3 <- 
+  ggplot(SVAR2_datasæt_robusthed)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BOLIGPRIS1, x=Måneder, color = "UD-FORV-HP")) +
+  geom_line(aes(y=BOLIGPRIS2, x=Måneder, color = "FORV-HP-UD")) +
+  geom_line(aes(y=BOLIGPRIS3, x=Måneder, color = "HP-FORV-UD")) +
+  scale_color_manual(name='Specifikation',
+                     breaks=c('UD-FORV-HP', 'FORV-HP-UD', 'HP-FORV-UD'),
+                     values=c('UD-FORV-HP'='red', 'FORV-HP-UD'='blue', 'HP-FORV-UD'='green'))+
+  labs(title = "Stød - Boligpris", x="Lag (Måneder)", y="", caption = "Egne beregninger", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+## SAMLET
+model2_specifikation_samlet_plot <- ggarrange(model2_specifikation1, ggarrange(
+model2_specifikation2,
+model2_specifikation3, ncol = 2, common.legend = TRUE, legend = "bottom"),
+ncol=1, nrow=2, common.legend = FALSE, legend="none") + bgcolor("#f3f3f3")
+
+ggexport(
+  model2_specifikation_samlet_plot,
+  plotlist = NULL,
+  filename = "Specifikationer model 2.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 1800,
+  height = 1200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+```
+
+```{r Diskussion}
+diskussion <- read_excel("~/Desktop/Universitet/Onedrive AAU/OneDrive - Aalborg Universitet/Bachelorprojekt/Igangværende projekt/diskussion2.xlsx")
+ggplot(diskussion)+
+  geom_line(aes(y=Boligpris, x=Tid, color = "Boligpris"), color = "Dark blue")+
+  labs(title = "Boligprisindeks",subtitle = "Enfamilie huse i indeks 2006=100", caption = "Danmarks statistik: EJ14",x="Tid", y="Indeks", color=NULL)+ th
+
+```
+
+
+
+
+# Andet i R
+```{r Periode plots - historisk overblik}
+## Data
+P1_tid <- datavecm1$Tid[0:200]
+P1_HPg <- ts(datavecm1$`Boligpriser 1985`[0:200], start = c(1951,1), frequency = 4)
+P1_BNPg <- ts(datavecm1$`Real BNP`[0:200], start = c(1951,1), frequency = 4)
+P1_KREDITg <- ts(datavecm1$`Real kredit(mortgage bank)`[0:200], start = c(1951,1), frequency = 4)
+P1_RENTEN30g <- ts(datavecm1$`Real renten30`[0:200], start = c(1951,1), frequency = 4)
+
+førsteperiodedata <- as.data.frame(P1_tid)
+førsteperiodedata$tid <- as.yearqtr(P1_tid)
+førsteperiodedata$boligpris <- P1_HPg - decompose(P1_HPg)$seasonal
+førsteperiodedata$bnp <- P1_BNPg - decompose(P1_BNPg)$seasonal
+førsteperiodedata$kredit <- P1_KREDITg - decompose(P1_KREDITg)$seasonal
+førsteperiodedata$renten <- P1_RENTEN30g - decompose(P1_RENTEN30g)$seasonal
+
+
+
+## Plots
+periode1_hp <- ggplot(førsteperiodedata) +
+  geom_line(aes(y=boligpris, x=tid), color = "Blue") +
+  labs(title = "Reale Boligpriser i første periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Indeks", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(førsteperiodedata$tid, n = 10))
+
+periode1_bnp <- ggplot(førsteperiodedata) +
+  geom_line(aes(y=bnp, x=tid), color = "darkgreen") +
+  labs(title = "Real BNP i første periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Millioner", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(førsteperiodedata$tid, n = 10))
+
+periode1_kredit <- ggplot(førsteperiodedata) +
+  geom_line(aes(y=kredit, x=tid), color = "lightblue") +
+  labs(title = "Realkredit i første periode",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", x="Tid", y="Millioner", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(førsteperiodedata$tid, n = 10))
+
+periode1_rente <- ggplot(førsteperiodedata) +
+  geom_line(aes(y=renten, x=tid), color = "orange") +
+  labs(title = "Realrenten i første periode",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", x="Tid", y="Procent", caption = "Abildgren (2017) og DST.dk", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(førsteperiodedata$tid, n = 10))
+
+
+ggarrange(periode1_hp,
+          periode1_bnp,
+          periode1_kredit,
+          periode1_rente,
+          ncol = 2, nrow = 2)
+
+
+# ANDEN PERIODE
+P2_tid <- datavecm1$Tid[200:276]
+P2_HPg <- ts(datavecm1$`Boligpriser 1985`[200:276], start = c(1951,1), frequency = 4)
+P2_BNPg <- ts(datavecm1$`Real BNP`[200:276], start = c(1951,1), frequency = 4)
+P2_KREDITg <- ts(datavecm1$`Real kredit(mortgage bank)`[200:276], start = c(1951,1), frequency = 4)
+P2_RENTEN30g <- ts(datavecm1$`Real renten30`[200:276], start = c(1951,1), frequency = 4)
+
+
+andenperiodedata <- as.data.frame(P2_tid)
+andenperiodedata$tid <- as.yearqtr(P2_tid)
+andenperiodedata$boligpris <- P2_HPg - decompose(P2_HPg)$seasonal
+andenperiodedata$bnp <- P2_BNPg - decompose(P2_BNPg)$seasonal
+andenperiodedata$kredit <- P2_KREDITg - decompose(P2_KREDITg)$seasonal
+andenperiodedata$renten <- P2_RENTEN30g - decompose(P2_RENTEN30g)$seasonal
+
+
+## Plots
+periode2_hp <- ggplot(andenperiodedata) +
+  geom_line(aes(y=boligpris, x=tid), color = "Blue") +
+  labs(title = "Reale boligpriser i anden periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Indeks", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(andenperiodedata$tid, n = 10))
+
+periode2_bnp <- ggplot(andenperiodedata) +
+  geom_line(aes(y=bnp, x=tid), color = "darkgreen") +
+  labs(title = "Real BNP i anden periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Millioner", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(andenperiodedata$tid, n = 10))
+
+periode2_kredit <- ggplot(andenperiodedata) +
+  geom_line(aes(y=kredit, x=tid), color = "lightblue") +
+  labs(title = "Realkredit i anden periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Millioner", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(andenperiodedata$tid, n = 10))
+
+periode2_rente <- ggplot(andenperiodedata) +
+  geom_line(aes(y=renten, x=tid), color = "orange") +
+  labs(title = "Realrenten i anden periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Procent", caption = "Abildgren (2017) og DST.dk", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(andenperiodedata$tid, n = 10))
+
+ggarrange(periode2_hp,
+          periode2_bnp,
+          periode2_kredit,
+          periode2_rente,
+          ncol = 2, nrow = 2)
+
+
+# Tredje PERIODE
+P3_tid <- datavecm1$Tid[277:284]
+P3_HPg <- ts(datavecm1$`Boligpriser 1985`[277:284], start = c(1951,1), frequency = 4)
+P3_BNPg <- ts(datavecm1$`Real BNP`[277:284], start = c(1951,1), frequency = 4)
+P3_KREDITg <- ts(datavecm1$`Real kredit(mortgage bank)`[277:284], start = c(1951,1), frequency = 4)
+P3_RENTEN30g <- ts(datavecm1$`Real renten30`[277:284], start = c(1951,1), frequency = 4)
+
+
+tredjeperiodedata <- as.data.frame(P3_tid)
+tredjeperiodedata$tid <- as.yearqtr(P3_tid)
+tredjeperiodedata$boligpris <- P3_HPg - decompose(P3_HPg)$seasonal
+tredjeperiodedata$bnp <- P3_BNPg - decompose(P3_BNPg)$seasonal
+tredjeperiodedata$kredit <- P3_KREDITg - decompose(P3_KREDITg)$seasonal
+tredjeperiodedata$renten <- P3_RENTEN30g - decompose(P3_RENTEN30g)$seasonal
+
+
+## Plots
+periode3_hp <- ggplot(tredjeperiodedata) +
+  geom_line(aes(y=boligpris, x=tid), color = "Blue") +
+  labs(title = "Reale boligpriser i tredje periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Indeks", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(tredjeperiodedata$tid, n = 10))
+
+periode3_bnp <- ggplot(tredjeperiodedata) +
+  geom_line(aes(y=bnp, x=tid), color = "darkgreen") +
+  labs(title = "Real BNP i tredje periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Millioner", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(tredjeperiodedata$tid, n = 10))
+
+periode3_kredit <- ggplot(tredjeperiodedata) +
+  geom_line(aes(y=kredit, x=tid), color = "lightblue") +
+  labs(title = "Realkredit i tredje periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Millioner", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(tredjeperiodedata$tid, n = 10))
+
+periode3_rente <- ggplot(tredjeperiodedata) +
+  geom_line(aes(y=renten, x=tid), color = "orange") +
+  labs(title = "Realrenten i tredje periode", x="Tid",subtitle = "Sæsonkorrigeret og deflateret med CPI indeks", y="Procent", caption = "Abildgren (2017) og DST.dk", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank(), axis.text.x = element_text(angle = 60, vjust = 0.5, hjust=0.5)) + 
+  th + scale_x_yearqtr(breaks=pretty(tredjeperiodedata$tid, n = 10))
+
+ggarrange(periode3_hp,
+          periode3_bnp,
+          periode3_kredit,
+          periode3_rente,
+          ncol = 2, nrow = 2)
+```
+
+
+
+# Lambda robusthed model 1
+```{r HPFILTER Robusthed model 1}
+lambda <- 1600
+HPcyklus_test1 <- hpfilter(HPsæson, lambda, type = "lambda")$cycle
+BNPcyklus_test1 <- hpfilter(BNPsæson, lambda, type = "lambda")$cycle
+KREDITcyklus_test1 <- hpfilter(KREDITsæson, lambda, type = "lambda")$cycle
+RENTEN30cyklus_test1 <- hpfilter(RENTEN30sæson, lambda, type = "lambda")$cycle
+
+lambda <- 100000
+HPcyklus_test2 <- hpfilter(HPsæson, lambda, type = "lambda")$cycle
+BNPcyklus_test2 <- hpfilter(BNPsæson, lambda, type = "lambda")$cycle
+KREDITcyklus_test2 <- hpfilter(KREDITsæson, lambda, type = "lambda")$cycle
+RENTEN30cyklus_test2 <- hpfilter(RENTEN30sæson, lambda, type = "lambda")$cycle
+
+lambda <- 400000
+HPcyklus_test3 <- hpfilter(HPsæson, lambda, type = "lambda")$cycle
+BNPcyklus_test3 <- hpfilter(BNPsæson, lambda, type = "lambda")$cycle
+KREDITcyklus_test3 <- hpfilter(KREDITsæson, lambda, type = "lambda")$cycle
+RENTEN30cyklus_test3 <- hpfilter(RENTEN30sæson, lambda, type = "lambda")$cycle
+
+lambda <- 1600
+HPcyklus_test1 <- hpfilter(HPsæson, lambda, type = "lambda")$cycle
+BNPcyklus_test1 <- hpfilter(BNPsæson, lambda, type = "lambda")$cycle
+KREDITcyklus_test1 <- hpfilter(KREDITsæson, lambda, type = "lambda")$cycle
+RENTEN30cyklus_test1 <- hpfilter(RENTEN30sæson, lambda, type = "lambda")$cycle
+lambda <- 1600
+
+
+```
+
+```{r CYKLISK DATASÆT}
+lambdatest <- data.frame(tid)
+lambdatest$HUSPRIS1 <- HPcyklus_test1
+lambdatest$BNP1 <- BNPcyklus_test1
+lambdatest$KREDIT1 <- KREDITcyklus_test1
+lambdatest$RENTEN301 <- RENTEN30cyklus_test1
+lambdatest$HUSPRIS2 <- HPcyklus_test2
+lambdatest$BNP2 <- BNPcyklus_test2
+lambdatest$KREDIT2 <- KREDITcyklus_test2
+lambdatest$RENTEN302 <- RENTEN30cyklus_test2
+lambdatest$HUSPRIS3 <- HPcyklus_test3
+lambdatest$BNP3 <- BNPcyklus_test3
+lambdatest$KREDIT3 <- KREDITcyklus_test3
+lambdatest$RENTEN303 <- RENTEN30cyklus_test3
+```
+
+```{r}
+HP_lambda <- ggplot(lambdatest)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=HUSPRIS1, x=tid, color = "1600")) +
+  geom_line(aes(y=HUSPRIS2, x=tid, color = "100 000")) +
+  geom_line(aes(y=HUSPRIS3, x=tid, color = "400 000")) +
+  scale_color_manual(name='Lambda værdier',
+                     breaks=c('1600', '100 000', '400 000'),
+                     values=c('1600'='blue', '100 000'='orange', '400 000'='lightblue'))+
+  labs(title = "Cykliske udsving i Boligpriser",subtitle = "Varrierende lambda værdier", x="Tid", y="Log(Indeks)", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+BNP_lambda <- ggplot(lambdatest)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=BNP1, x=tid, color = "1600")) +
+  geom_line(aes(y=BNP2, x=tid, color = "100 000")) +
+  geom_line(aes(y=BNP3, x=tid, color = "400 000")) +
+  scale_color_manual(name='Lambda værdier',
+                     breaks=c('1600', '100 000', '400 000'),
+                     values=c('1600'='blue', '100 000'='orange', '400 000'='lightblue'))+
+  labs(title = "Cykliske udsving i BNP",subtitle = "Varrierende lambda værdier", x="Tid", y="Log(millioner)", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+Kredit_Lambda <- ggplot(lambdatest)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=KREDIT1, x=tid, color = "1600")) +
+  geom_line(aes(y=KREDIT2, x=tid, color = "100 000")) +
+  geom_line(aes(y=KREDIT3, x=tid, color = "400 000")) +
+  scale_color_manual(name='Lambda værdier',
+                     breaks=c('1600', '100 000', '400 000'),
+                     values=c('1600'='blue', '100 000'='orange', '400 000'='lightblue'))+
+  labs(title = "Cykliske udsving i Kredit",subtitle = "Varrierende lambda værdier", x="Tid", y="Log(millioner)", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+
+Rente_lambda <- ggplot(lambdatest)+
+  geom_hline(yintercept=0) +
+  geom_line(aes(y=RENTEN301, x=tid, color = "1600")) +
+  geom_line(aes(y=RENTEN302, x=tid, color = "100 000")) +
+  geom_line(aes(y=RENTEN303, x=tid, color = "400 000")) +
+  scale_color_manual(name='Lambda værdier',
+                     breaks=c('1600', '100 000', '400 000'),
+                     values=c('1600'='blue', '100 000'='orange', '400 000'='lightblue'))+
+  labs(title = "Cykliske udsving i Renten",subtitle = "Varrierende lambda værdier", x="Tid", y="Log(procent)", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+model1_lambda_samlet <- ggarrange(HP_lambda, 
+                              BNP_lambda, 
+                              Kredit_Lambda, 
+                              Rente_lambda, 
+                              ncol = 2, nrow = 2, common.legend = TRUE, legend = "bottom") + bgcolor("#f3f3f3")
+
+ggexport(
+  model1_lambda_samlet,
+  plotlist = NULL,
+  filename = "lambdamodel1.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 2500,
+  height = 2200,
+  pointsize = 12,
+  res = 150,
+  verbose = TRUE
+)
+```
+
+
+# Lambda robusthed model 2
+```{r HPFILTER Robusthed model 2}
+lambda_tid <- dataaa$Tid[25:207]
+lambda_pris <- ts(log(dataaa$realpris[25:207]), start = c(2006,1), frequency = 12)
+lambda_udbud <- ts(log(dataaa$udbud[25:207]), start = c(2006,1), frequency = 12)
+
+## Sæsonkorrigering
+lambda_pris <- lambda_pris - decompose(lambda_pris)$seasonal
+lambda_udbud <- lambda_udbud - decompose(lambda_udbud)$seasonal
+
+
+lambda = 14400
+boligprislambda1 <- hpfilter(lambda_pris, lambda, type = "lambda", drift = T)$cycle
+udbudlambda1 <- hpfilter(lambda_udbud, lambda, type = "lambda", drift = T)$cycle
+
+lambda = 86400
+boligprislambda2 <- hpfilter(lambda_pris, lambda, type = "lambda", drift = T)$cycle
+udbudlambda2 <- hpfilter(lambda_udbud, lambda, type = "lambda", drift = T)$cycle
+
+lambda = 129600
+boligprislambda3 <- hpfilter(lambda_pris, lambda, type = "lambda", drift = T)$cycle
+udbudlambda3 <- hpfilter(lambda_udbud, lambda, type = "lambda", drift = T)$cycle
+```
+
+```{r CYKLISK DATASÆT}
+lambdatest1 <- data.frame(lambda_tid)
+lambdatest1$tid <- seq(ymd("2006/1/15"), ymd("2021/3/15"), by = "months")
+lambdatest1$Boligpris1 <- boligprislambda1
+lambdatest1$Udbud1 <- udbudlambda1
+lambdatest1$Boligpris2 <- boligprislambda2
+lambdatest1$Udbud2 <- udbudlambda2
+lambdatest1$Boligpris3 <- boligprislambda3
+lambdatest1$Udbud3 <- udbudlambda3
+```
+
+```{r}
+Boligpris_lambda <- ggplot(lambdatest1)+
+  geom_line(aes(y=Boligpris1, x=tid, color = "14 400"))+
+  geom_line(aes(y=Boligpris2, x=tid, color = "86 400")) +
+  geom_line(aes(y=Boligpris3, x=tid, color = "129 600")) +
+  scale_color_manual(name='Lambda værdier',
+                     breaks=c('14 400', '86 400', '129 600'),
+                     values=c('14 400'='blue', '86 400'='orange', '129 600'='lightblue'))+
+  labs(title = "Cykliske udsving i Boligpriserne",subtitle = "Varrierende lambda værdier", x="Tid", y="Log(Indeks)", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+Udbud_lambda <- ggplot(lambdatest1)+
+  geom_line(aes(y=Udbud1, x=tid, color = "14 400"))+
+  geom_line(aes(y=Udbud2, x=tid, color = "86 400")) +
+  geom_line(aes(y=Udbud3, x=tid, color = "129 600")) +
+  scale_color_manual(name='Lambda værdier',
+                     breaks=c('14 400', '86 400', '129 600'),
+                     values=c('14 400'='blue', '86 400'='orange', '129 600'='lightblue'))+
+  labs(title = "Cykliske udsving i Udbuddet",subtitle = "Varrierende lambda værdier", x="Tid", y="Log(Antal)", caption = "", color= T)+
+  theme(legend.position="right") + theme(panel.grid.minor.x = element_blank()) + th
+
+lambda_model2_samlet <- ggarrange(Boligpris_lambda, 
+                              Udbud_lambda, 
+                              ncol = 1, nrow = 2, common.legend = TRUE, legend = "bottom") + bgcolor("#f3f3f3")
+
+ggexport(
+  lambda_model2_samlet,
+  plotlist = NULL,
+  filename = "lambdamodel2samlet.png",
+  ncol = NULL,
+  nrow = NULL,
+  width = 2500,
+  height = 1600,
+  pointsize = 12,
+  res = 250,
+  verbose = TRUE
+)
+```
+
+
+
+
+
+
+
+
+
+
+
